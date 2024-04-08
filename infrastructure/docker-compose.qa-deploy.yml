@@ -9,7 +9,7 @@ services:
       # Use HTTP-01 challenge as the web server is publicly available
       # https://doc.traefik.io/traefik/https/acme/#httpchallenge
       # For DNS-01 challenge and manual certificates, check staging and production configurations
-      - --certificatesresolvers.certResolver.acme.email=riku@opencrvs.org
+      - --certificatesresolvers.certResolver.acme.email=mohammed.minhaj@technoforte.co.in
       - --certificatesresolvers.certResolver.acme.storage=acme.json
       - --certificatesresolvers.certResolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory
       - --certificatesresolvers.certResolver.acme.httpchallenge.entrypoint=web
@@ -33,7 +33,7 @@ services:
 
   notification:
     environment:
-      - LANGUAGES=en,fr
+      - LANGUAGES=en
       - SENTRY_DSN=${SENTRY_DSN}
       - QA_ENV=true
       - NODE_ENV=production
@@ -65,7 +65,7 @@ services:
 
   gateway:
     environment:
-      - LANGUAGES=en,fr
+      - LANGUAGES=en
       - SENTRY_DSN=${SENTRY_DSN}
       - COUNTRY=FAR
       - QA_ENV=true
@@ -73,7 +73,7 @@ services:
 
   workflow:
     environment:
-      - LANGUAGES=en,fr
+      - LANGUAGES=en
       - SENTRY_DSN=${SENTRY_DSN}
       - QA_ENV=true
       - NODE_ENV=production
