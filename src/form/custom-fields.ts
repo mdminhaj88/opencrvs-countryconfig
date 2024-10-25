@@ -8,13 +8,13 @@
  *
  * Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencrvs-core/blob/master/AUTHORS.
  */
+import { uppercaseFirstLetter } from '@countryconfig/utils'
+import { getCustomFieldMapping } from '@countryconfig/utils/mapping/field-mapping-utils'
+import { camelCase } from 'lodash'
 import { MessageDescriptor } from 'react-intl'
+import { getNationalIDValidators } from './common/default-validation-conditionals'
 import { formMessageDescriptors } from './common/messages'
 import { Conditional, SerializedFormField } from './types/types'
-import { getCustomFieldMapping } from '@countryconfig/utils/mapping/field-mapping-utils'
-import { getNationalIDValidators } from './common/default-validation-conditionals'
-import { camelCase } from 'lodash'
-import { uppercaseFirstLetter } from '@countryconfig/utils'
 
 // ======================= CUSTOM FIELD CONFIGURATION =======================
 
@@ -74,8 +74,8 @@ export function getReasonForLateRegistration(
         }
   const expression: string =
     event === 'birth'
-      ? 'const pattern = /^\\d{4}-\\d{2}-\\d{2}$/; const today = new Date(); const eventDatePlusLateRegistrationTarget = new Date(values.childBirthDate); const lateRegistrationTarget = offlineCountryConfig && offlineCountryConfig.config.BIRTH.LATE_REGISTRATION_TARGET; eventDatePlusLateRegistrationTarget.setDate(eventDatePlusLateRegistrationTarget.getDate() + lateRegistrationTarget); !pattern.test(values.childBirthDate) || today < eventDatePlusLateRegistrationTarget;'
-      : 'const pattern = /^\\d{4}-\\d{2}-\\d{2}$/; const today = new Date(); const eventDatePlusLateRegistrationTarget = new Date(values.deathDate); const lateRegistrationTarget = offlineCountryConfig && offlineCountryConfig.config.DEATH.REGISTRATION_TARGET; eventDatePlusLateRegistrationTarget.setDate(eventDatePlusLateRegistrationTarget.getDate() + lateRegistrationTarget); !pattern.test(values.deathDate) || today < eventDatePlusLateRegistrationTarget;'
+      ? 'const pattern = /^\\d{4}-\\d{1,2}-\\d{1,2}$/; const today = new Date(); const eventDatePlusLateRegistrationTarget = new Date(values.childBirthDate); const lateRegistrationTarget = offlineCountryConfig && offlineCountryConfig.config.BIRTH.LATE_REGISTRATION_TARGET; eventDatePlusLateRegistrationTarget.setDate(eventDatePlusLateRegistrationTarget.getDate() + lateRegistrationTarget); !pattern.test(values.childBirthDate) || today < eventDatePlusLateRegistrationTarget;'
+      : 'const pattern = /^\\d{4}-\\d{1,2}-\\d{1,2}$/; const today = new Date(); const eventDatePlusLateRegistrationTarget = new Date(values.deathDate); const lateRegistrationTarget = offlineCountryConfig && offlineCountryConfig.config.DEATH.REGISTRATION_TARGET; eventDatePlusLateRegistrationTarget.setDate(eventDatePlusLateRegistrationTarget.getDate() + lateRegistrationTarget); !pattern.test(values.deathDate) || today < eventDatePlusLateRegistrationTarget;'
 
   return {
     name: fieldName,
@@ -183,8 +183,7 @@ export function getIDNumber(
     camelCase(idValue)
   )}`
   const validators = getValidators(sectionId, idValue)
-  // eslint-disable-next-line no-console
-  console.log('Custom field addded with handlebar: ', fieldName)
+
   return {
     name: fieldName,
     required,
