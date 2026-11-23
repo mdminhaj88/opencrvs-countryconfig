@@ -80,6 +80,7 @@ import { onRegisterHandler } from './api/registration'
 import { isServiceToken } from '@opencrvs/toolkit/authentication'
 import { workqueueconfigHandler } from './api/workqueue/handler'
 import getUserNotificationRoutes from './config/routes/userNotificationRoutes'
+import getVerifiableCredentialRoutes from './verifiable-credentials/routes'
 import {
   importAdministrativeAreas,
   importEvent,
@@ -556,6 +557,7 @@ export async function createServer() {
   })
 
   server.route(getUserNotificationRoutes())
+  server.route(getVerifiableCredentialRoutes())
 
   server.route({
     method: 'POST',

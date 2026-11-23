@@ -128,3 +128,17 @@ export const extractStatisticsMap = (statistics: LocationStatistic[]) => {
   }
   return statisticsMap
 }
+
+/**
+ * Hapi may give the authorization header as a string or string[]. The toolkit's
+ * createClient expects a single `Bearer ...` token, so normalise it.
+ */
+export function getBearerToken(
+  authorization: string | string[] | undefined
+): `Bearer ${string}` {
+  const token = Array.isArray(authorization) ? authorization[0] : authorization
+  if (!token) {
+    throw new Error('Missing authorization header')
+  }
+  return token as `Bearer ${string}`
+}

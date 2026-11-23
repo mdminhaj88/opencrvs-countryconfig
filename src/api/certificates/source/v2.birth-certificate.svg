@@ -420,6 +420,7 @@ Copyright (C) The OpenCRVS Authors located at https://github.com/opencrvs/opencr
       <rect width="222.13" height="30" fill="white" transform="translate(289.95 543.99)" />
     </clipPath>
   </defs>
+  <image data-testid="verifiable-credential-qr-code" width="112" height="112" xlink:href="{{ $lookup ($action "PRINT_CERTIFICATE") "annotation.verifiable-credential" }}" x="55" y="43"></image>
   {{#if $review}}
     <image width="36" height="36" xlink:href="{{qrCode}}" x="500" y="770"></image>
   {{/if}}
