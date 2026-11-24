@@ -17,7 +17,7 @@
  * Only Node built-ins are used (Node 22: global fetch, node:crypto).
  */
 import type { ReqRefDefaults, ServerRoute } from '@hapi/hapi'
-import { constants, generateKeyPairSync, sign } from 'node:crypto'
+import { constants, createHash, generateKeyPairSync, sign } from 'node:crypto'
 import type { KeyObject } from 'node:crypto'
 import { env } from '@countryconfig/environment'
 import { logger } from '@countryconfig/logger'
@@ -82,19 +82,23 @@ function makeProofJwt(nonce: string) {
   return `${signingInput}.${b64url(signature)}`
 }
 
-async function certifyRequest<T>(
+async function certifyFetch(
   code: string,
   path: string,
   init: Parameters<typeof fetch>[1] = {}
-): Promise<T> {
+): Promise<{ ok: boolean; status: number; text: string }> {
   const base = env.CERTIFY_BASE_URL.replace(/\/$/, '')
   const target = `${base}${path}`
-  let response: Awaited<ReturnType<typeof fetch>>
   try {
-    response = await fetch(target, {
+    const response = await fetch(target, {
       ...init,
       signal: AbortSignal.timeout(env.CERTIFY_HTTP_TIMEOUT_MS)
     })
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: await response.text()
+    }
   } catch (error) {
     // Network level failure (DNS, refused, TLS, timeout). Node only says
     // "fetch failed"; the useful part is in error.cause.
@@ -107,14 +111,19 @@ async function certifyRequest<T>(
       `${code} -> ${target}: ${detail}`
     )
   }
-  if (!response.ok) {
-    const text = await response.text()
-    logger.error(
-      `[certify] ${code} failed (${response.status}) on ${path}: ${text}`
-    )
-    throw new CertifyError(code, `Certify returned ${response.status}: ${text}`)
+}
+
+async function certifyRequest<T>(
+  code: string,
+  path: string,
+  init: Parameters<typeof fetch>[1] = {}
+): Promise<T> {
+  const res = await certifyFetch(code, path, init)
+  if (!res.ok) {
+    logger.error(`[certify] ${code} failed (${res.status}) on ${path}: ${res.text}`)
+    throw new CertifyError(code, `Certify returned ${res.status}: ${res.text}`)
   }
-  return (await response.json()) as T
+  return JSON.parse(res.text) as T
 }
 
 function stripNullish(value: unknown): unknown {
@@ -201,27 +210,60 @@ export async function issuePaperCredentialViaCertify(
       .map((c) => c.trim())
       .filter(Boolean)
   }
-  const credentialResponse = await certifyRequest<{ credential?: unknown }>(
-    'CREDENTIAL_ISSUANCE_FAILED',
-    '/issuance/credential',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token.access_token}`
-      },
-      body: JSON.stringify({
-        format: env.CERTIFY_PAPER_FORMAT,
-        credential_definition: credentialDefinition,
-        proof: {
-          proof_type: 'jwt',
-          jwt: makeProofJwt(token.c_nonce ?? '')
-        }
-      })
-    }
-  )
+  const issuanceRequest = (nonce: string) => ({
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token.access_token}`
+    },
+    body: JSON.stringify({
+      format: env.CERTIFY_PAPER_FORMAT,
+      credential_definition: credentialDefinition,
+      proof: { proof_type: 'jwt', jwt: makeProofJwt(nonce) }
+    })
+  })
 
-  return extractPaperQrPayload(credentialResponse.credential)
+  let nonce = token.c_nonce ?? ''
+  let credentialResponse: { credential?: unknown } | undefined
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await certifyFetch(
+      'CREDENTIAL_ISSUANCE_FAILED',
+      '/issuance/credential',
+      issuanceRequest(nonce)
+    )
+    if (res.ok) {
+      credentialResponse = JSON.parse(res.text)
+      break
+    }
+    // OpenID4VCI: on invalid_proof the issuer sends a fresh c_nonce; retry once
+    let freshNonce: string | undefined
+    try {
+      const body = JSON.parse(res.text)
+      if (
+        res.status === 400 &&
+        body?.error === 'invalid_proof' &&
+        typeof body.c_nonce === 'string'
+      ) {
+        freshNonce = body.c_nonce
+      }
+    } catch {
+      // not JSON
+    }
+    if (attempt === 0 && freshNonce) {
+      logger.warn('[certify] invalid_proof, retrying once with the c_nonce Certify returned')
+      nonce = freshNonce
+      continue
+    }
+    logger.error(
+      `[certify] CREDENTIAL_ISSUANCE_FAILED failed (${res.status}) on /issuance/credential: ${res.text}`
+    )
+    throw new CertifyError(
+      'CREDENTIAL_ISSUANCE_FAILED',
+      `Certify returned ${res.status}: ${res.text}`
+    )
+  }
+
+  return extractPaperQrPayload(credentialResponse?.credential)
 }
 
 /**
@@ -231,6 +273,37 @@ export async function issuePaperCredentialViaCertify(
  *    CERTIFY_PAPER_QR_CLAIM_PATH (default claim169.qrCode), the same field the
  *    OpenG2P flow uses. The full JSON-LD document is far too big for a printed QR.
  */
+function findStringByKey(
+  node: unknown,
+  key: string,
+  depth = 0
+): string | undefined {
+  if (!node || typeof node !== 'object' || depth > 6) return undefined
+  for (const [k, v] of Object.entries(node)) {
+    if (k === key && typeof v === 'string' && v) return v
+  }
+  for (const v of Object.values(node)) {
+    const found = findStringByKey(v, key, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+
+/** Key paths and value types only (never values), for error messages. */
+function describeShape(node: unknown, path = '', depth = 0): string[] {
+  const here = path || '<root>'
+  if (node === null) return [`${here}: null`]
+  if (Array.isArray(node)) return [`${here}: array(${node.length})`]
+  if (typeof node === 'object') {
+    if (depth >= 4) return [`${here}: object`]
+    return Object.entries(node).flatMap(([k, v]) =>
+      describeShape(v, path ? `${path}.${k}` : k, depth + 1)
+    )
+  }
+  if (typeof node === 'string') return [`${here}: string(${node.length})`]
+  return [`${here}: ${typeof node}`]
+}
+
 function extractPaperQrPayload(credential: unknown): string {
   if (typeof credential === 'string' && credential) {
     rejectUnresolvedPlaceholders(credential)
@@ -239,7 +312,7 @@ function extractPaperQrPayload(credential: unknown): string {
   if (credential && typeof credential === 'object') {
     rejectUnresolvedPlaceholders(JSON.stringify(credential))
     const path = env.CERTIFY_PAPER_QR_CLAIM_PATH
-    const payload = path
+    const atPath = path
       .split('.')
       .reduce<unknown>(
         (node, key) =>
@@ -248,10 +321,19 @@ function extractPaperQrPayload(credential: unknown): string {
             : undefined,
         credential
       )
-    if (typeof payload !== 'string' || !payload) {
+    // The template may put claim169 inside credentialSubject or at the root, so
+    // fall back to the first string found under the last key of the path.
+    const lastKey = path.split('.').pop() as string
+    const payload =
+      typeof atPath === 'string' && atPath
+        ? atPath
+        : findStringByKey(credential, lastKey)
+    if (!payload) {
+      const shape = describeShape(credential).join(', ').slice(0, 1500)
+      logger.error(`[certify] no QR payload in credential. Shape: ${shape}`)
       throw new CertifyError(
         'PAPER_QR_PAYLOAD_MISSING',
-        `Certify returned a credential without a string at "${path}". Check qr_settings of the credential configuration and CERTIFY_PAPER_QR_CLAIM_PATH.`
+        `no string at "${path}" or under any "${lastKey}" key. Credential shape: ${shape}`
       )
     }
     return payload
@@ -267,6 +349,29 @@ function extractPaperQrPayload(credential: unknown): string {
  * JWT. Use this from routes.ts to skip the HTTP hop (and the
  * VERIFIABLE_CREDENTIALS_RAW_JWT_SIGN_URL variable) entirely.
  */
+// OpenCRVS can fire the paper-credential request twice for one print (two
+// requests a few ms apart were seen in the logs). Concurrent flows against
+// Certify were slow and sometimes failed with invalid_proof, and each flow would
+// mint a separate credential. So identical requests share one in-flight call, and
+// a successful result is reused briefly. Set CERTIFY_PAPER_CACHE_TTL_MS=0 to
+// disable the reuse (in-flight sharing stays on).
+const CACHE_TTL_MS = Number(process.env.CERTIFY_PAPER_CACHE_TTL_MS ?? 300000)
+const inflight = new Map<string, Promise<string>>()
+const recent = new Map<string, { value: string; expires: number }>()
+
+function issuanceKey(claims: Record<string, unknown>, types: string[]) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        claims,
+        types,
+        config: env.CERTIFY_PAPER_CONFIG_ID,
+        format: env.CERTIFY_PAPER_FORMAT
+      })
+    )
+    .digest('hex')
+}
+
 export async function issuePaperCredentialFromTemplate(
   template: PaperSignPayload
 ): Promise<string> {
@@ -285,10 +390,36 @@ export async function issuePaperCredentialFromTemplate(
   const types = configuredTypes.length
     ? configuredTypes
     : (template.credentialData?.type ?? ['VerifiableCredential'])
+
+  const key = issuanceKey(claims, types)
+  const hit = recent.get(key)
+  if (hit && hit.expires > Date.now()) {
+    logger.info('[certify] reusing a recently issued paper credential')
+    return hit.value
+  }
+  const running = inflight.get(key)
+  if (running) {
+    logger.info('[certify] joining the in-flight paper credential issuance')
+    return running
+  }
+
   logger.info(
     `[certify] issuing paper credential, claim keys: ${Object.keys(claims).join(',')}`
   )
-  return issuePaperCredentialViaCertify(claims, types)
+  const promise = issuePaperCredentialViaCertify(claims, types)
+    .then((value) => {
+      if (CACHE_TTL_MS > 0) {
+        const now = Date.now()
+        recent.set(key, { value, expires: now + CACHE_TTL_MS })
+        if (recent.size > 200) {
+          for (const [k, v] of recent) if (v.expires <= now) recent.delete(k)
+        }
+      }
+      return value
+    })
+    .finally(() => inflight.delete(key))
+  inflight.set(key, promise)
+  return promise
 }
 
 /**
