@@ -5,7 +5,7 @@
  *
  * OpenCRVS (`/verifiable-credentials/paper-credential` in routes.ts) POSTs the
  * paper template payload to VERIFIABLE_CREDENTIALS_RAW_JWT_SIGN_URL and expects
- * a plain-text, 3-part signed JWT back. This route is that endpoint. It runs the
+ * the string to encode in the paper QR (a signed JWT, or the claim-169 payload for ldp_vc). This route is that endpoint. It runs the
  * OpenID4VCI pre-authorized-code flow against Inji Certify on the registrar's
  * behalf, because there is no wallet to redeem the offer:
  *
@@ -88,10 +88,25 @@ async function certifyRequest<T>(
   init: Parameters<typeof fetch>[1] = {}
 ): Promise<T> {
   const base = env.CERTIFY_BASE_URL.replace(/\/$/, '')
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(env.CERTIFY_HTTP_TIMEOUT_MS)
-  })
+  const target = `${base}${path}`
+  let response: Awaited<ReturnType<typeof fetch>>
+  try {
+    response = await fetch(target, {
+      ...init,
+      signal: AbortSignal.timeout(env.CERTIFY_HTTP_TIMEOUT_MS)
+    })
+  } catch (error) {
+    // Network level failure (DNS, refused, TLS, timeout). Node only says
+    // "fetch failed"; the useful part is in error.cause.
+    const cause = (error as { cause?: { code?: string; message?: string } })
+      .cause
+    const detail = cause?.code ?? cause?.message ?? (error as Error).message
+    logger.error(`[certify] ${code}: cannot reach ${target}: ${detail}`)
+    throw new CertifyError(
+      'CERTIFY_UNREACHABLE',
+      `${code} -> ${target}: ${detail}`
+    )
+  }
   if (!response.ok) {
     const text = await response.text()
     logger.error(
@@ -179,6 +194,13 @@ export async function issuePaperCredentialViaCertify(
   )
 
   // 4. Request the signed credential with a proof of possession
+  const credentialDefinition: Record<string, unknown> = { type: credentialTypes }
+  if (env.CERTIFY_PAPER_FORMAT === 'ldp_vc') {
+    // JSON-LD credentials need the @context, same as the OpenG2P flow
+    credentialDefinition['@context'] = env.CERTIFY_PAPER_CONTEXT.split(',')
+      .map((c) => c.trim())
+      .filter(Boolean)
+  }
   const credentialResponse = await certifyRequest<{ credential?: unknown }>(
     'CREDENTIAL_ISSUANCE_FAILED',
     '/issuance/credential',
@@ -190,7 +212,7 @@ export async function issuePaperCredentialViaCertify(
       },
       body: JSON.stringify({
         format: env.CERTIFY_PAPER_FORMAT,
-        credential_definition: { type: credentialTypes },
+        credential_definition: credentialDefinition,
         proof: {
           proof_type: 'jwt',
           jwt: makeProofJwt(token.c_nonce ?? '')
@@ -199,15 +221,45 @@ export async function issuePaperCredentialViaCertify(
     }
   )
 
-  const credential = credentialResponse.credential
-  if (typeof credential !== 'string' || credential.split('.').length !== 3) {
-    throw new CertifyError(
-      'PAPER_CREDENTIAL_NOT_JWT',
-      'Certify did not return a compact 3-part JWT. The paper credential configuration must use format jwt_vc_json.'
-    )
+  return extractPaperQrPayload(credentialResponse.credential)
+}
+
+/**
+ * Turns Certify's answer into the string that goes into the paper QR.
+ *  - compact string (jwt_vc_json / vc+sd-jwt): the string itself
+ *  - JSON-LD object (ldp_vc): the compact payload Certify renders at
+ *    CERTIFY_PAPER_QR_CLAIM_PATH (default claim169.qrCode), the same field the
+ *    OpenG2P flow uses. The full JSON-LD document is far too big for a printed QR.
+ */
+function extractPaperQrPayload(credential: unknown): string {
+  if (typeof credential === 'string' && credential) {
+    rejectUnresolvedPlaceholders(credential)
+    return credential
   }
-  rejectUnresolvedPlaceholders(credential)
-  return credential
+  if (credential && typeof credential === 'object') {
+    rejectUnresolvedPlaceholders(JSON.stringify(credential))
+    const path = env.CERTIFY_PAPER_QR_CLAIM_PATH
+    const payload = path
+      .split('.')
+      .reduce<unknown>(
+        (node, key) =>
+          node && typeof node === 'object'
+            ? (node as Record<string, unknown>)[key]
+            : undefined,
+        credential
+      )
+    if (typeof payload !== 'string' || !payload) {
+      throw new CertifyError(
+        'PAPER_QR_PAYLOAD_MISSING',
+        `Certify returned a credential without a string at "${path}". Check qr_settings of the credential configuration and CERTIFY_PAPER_QR_CLAIM_PATH.`
+      )
+    }
+    return payload
+  }
+  throw new CertifyError(
+    'PAPER_CREDENTIAL_INVALID',
+    'Certify did not return a credential'
+  )
 }
 
 /**

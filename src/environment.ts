@@ -27,10 +27,21 @@ export const env = cleanEnv(process.env, {
     desc: 'aud claim of the OpenID4VCI proof JWT (Certify credential issuer identifier)'
   }),
   CERTIFY_PAPER_CONFIG_ID: str({
-    default: 'crvs_birth_paper_v1',
-    desc: 'Certify credential configuration id for the paper birth credential (format jwt_vc_json)'
+    default: 'CrvsBirthPaperCredential',
+    desc: 'Certify credential_config_key_id of the paper birth credential'
   }),
-  CERTIFY_PAPER_FORMAT: str({ default: 'jwt_vc_json' }),
+  CERTIFY_PAPER_FORMAT: str({
+    default: 'ldp_vc',
+    desc: 'Credential format of that configuration: ldp_vc (claim-169 QR) or jwt_vc_json'
+  }),
+  CERTIFY_PAPER_CONTEXT: str({
+    default: 'https://www.w3.org/2018/credentials/v1',
+    desc: 'ldp_vc only: comma separated JSON-LD contexts, as in the Certify configuration'
+  }),
+  CERTIFY_PAPER_QR_CLAIM_PATH: str({
+    default: 'claim169.qrCode',
+    desc: 'ldp_vc only: path in the issued credential holding the compact QR payload'
+  }),
   CERTIFY_PAPER_CREDENTIAL_TYPES: str({
     default: '',
     desc: 'Comma separated credential types requested from Certify. If empty, the type sent by the paper template is used.'

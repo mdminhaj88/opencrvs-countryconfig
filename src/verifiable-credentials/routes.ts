@@ -78,8 +78,10 @@ const paperCredentialRoute = {
 
     const credentialJwt = (await response.text()).trim().replace(/^"|"$/g, '')
 
-    if (credentialJwt.split('.').length !== 3) {
-      throw new Error('Issuer did not return a JWT credential')
+    // The QR payload is a JWT for jwt_vc_json, or the compact claim-169 string
+    // for ldp_vc, so only check that something came back.
+    if (!credentialJwt) {
+      throw new Error('Issuer did not return a credential')
     }
 
     const paperVcQrDataUrl = await QRCode.toDataURL(credentialJwt, {
