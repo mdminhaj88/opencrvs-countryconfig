@@ -17,6 +17,7 @@ import { getBearerToken } from '@countryconfig/utils'
 import QRCode from 'qrcode'
 import { paperBirthCredentialTemplate } from './paper-birth-credential-template'
 import { certifyPaperSignRoute } from './certify-paper-issuer'
+import { certifyPaperPdfRoute } from './certify-paper-pdf'
 
 const paperCredentialRoute = {
   method: 'POST',
@@ -106,7 +107,8 @@ export const PAPER_CREDENTIAL_HANDLER_URL = new URL(
  *  - paperCredentialRoute    called by the print form; builds the template and QR
  *  - certifyPaperSignRoute   the issuer behind VERIFIABLE_CREDENTIALS_RAW_JWT_SIGN_URL,
  *                            backed by Inji Certify
+ *  - certifyPaperPdfRoute    same payload, returns the printable credential PDF
  */
 export default function getVerifiableCredentialRoutes(): ServerRoute<ReqRefDefaults>[] {
-  return [certifyPaperSignRoute, paperCredentialRoute]
+  return [certifyPaperSignRoute, certifyPaperPdfRoute, paperCredentialRoute]
 }
